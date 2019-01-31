@@ -1,83 +1,66 @@
+# Kafka for Kubernetes
 
-# Kafka as Kubernetes StatefulSet
+This community seeks to provide:
+ * Production-worthy Kafka setup for persistent (domain- and ops-) data at small scale.
+ * Operational knowledge, biased towards resilience over throughput, as Kubernetes manifest.
+ * A platform for event-driven (streaming!) microservices design using Kubernetes.
 
-Example of three Kafka brokers depending on five Zookeeper instances.
+To quote [@arthurk](https://github.com/Yolean/kubernetes-kafka/issues/82#issuecomment-337532548):
 
-To get consistent service DNS names `kafka-N.broker.kafka`(`.svc.cluster.local`), run everything in a [namespace](http://kubernetes.io/docs/admin/namespaces/walkthrough/):
-```
-kubectl create -f 00namespace.yml
-```
+> thanks for creating and maintaining this Kubernetes files, they're up-to-date (unlike the kubernetes contrib files, don't require helm and work great!
 
-## Set up volume claims
+## Getting started
 
-You may add [storage class](http://kubernetes.io/docs/user-guide/persistent-volumes/#storageclasses)
-to the kafka StatefulSet declaration to enable automatic volume provisioning.
+We suggest you `apply -f` manifests in the following order:
+ * Your choice of storage classes from [./configure](./configure/)
+ * [namespace](./00-namespace.yml)
+ * [./rbac-namespace-default](./rbac-namespace-default/)
+ * [./zookeeper](./zookeeper/)
+ * [./kafka](./kafka/)
 
-Alternatively create [PV](http://kubernetes.io/docs/user-guide/persistent-volumes/#persistent-volumes)s and [PVC](http://kubernetes.io/docs/user-guide/persistent-volumes/#persistentvolumeclaims)s manually. For example in Minikube.
+That'll give you client "bootstrap" `bootstrap.kafka.svc.cluster.local:9092`.
 
-```
-./bootstrap/pv.sh
-kubectl create -f ./bootstrap/pvc.yml
-# check that claims are bound
-kubectl get pvc
-```
+## Fork
 
-## Set up Zookeeper
+Our only dependency is `kubectl`. Not because we dislike Helm or Operators, but because we think plain manifests make it easier to collaborate.
+If you begin to rely on this kafka setup we recommend you fork, for example to edit [broker config](https://github.com/Yolean/kubernetes-kafka/blob/master/kafka/10broker-config.yml#L47).
 
-There is a Zookeeper+StatefulSet [blog post](http://blog.kubernetes.io/2016/12/statefulset-run-scale-stateful-applications-in-kubernetes.html) and [example](https://github.com/kubernetes/contrib/tree/master/statefulsets/zookeeper),
-but it appears tuned for workloads heavier than Kafka topic metadata.
+## Version history
 
-The Kafka book (Definitive Guide, O'Reilly 2016) recommends that Kafka has its own Zookeeper cluster,
-so we use the [official docker image](https://hub.docker.com/_/zookeeper/)
-but with a [startup script change to guess node id from hostname](https://github.com/solsson/zookeeper-docker/commit/df9474f858ad548be8a365cb000a4dd2d2e3a217).
+| tag   | k8s ≥  | highlights |
+| ----- | ------ | ---------- |
+| v5.0.3 | 1.11+ | Zookeeper fix [#227](https://github.com/Yolean/kubernetes-kafka/pull/227) + [maxClientCnxns=1](https://github.com/Yolean/kubernetes-kafka/pull/230#issuecomment-445953857) |
+| v5.0  | 1.11+  | Destabilize because in Docker we want Java 11 [#197](https://github.com/Yolean/kubernetes-kafka/pull/197) [#191](https://github.com/Yolean/kubernetes-kafka/pull/191) |
+| v4.3.1 | 1.9+  | Critical Zookeeper persistence fix [#228](https://github.com/Yolean/kubernetes-kafka/pull/228) |
+| v4.3  | 1.9+   | Adds a proper shutdown hook [#207](https://github.com/Yolean/kubernetes-kafka/pull/207) |
+| v4.2  | 1.9+   | Kafka 1.0.2 and tools upgrade |
+|       |        | ... see [releases](https://github.com/Yolean/kubernetes-kafka/releases) for full history ... |
+| v1.0  | 1      | Stateful? In Kubernetes? In 2016? Yes. |
 
-Zookeeper runs as a [Deployment](http://kubernetes.io/docs/user-guide/deployments/) without persistent storage:
-```
-kubectl create -f ./zookeeper/
-```
+## Monitoring
 
-If you lose your zookeeper cluster, kafka will be unaware that persisted topics exist.
-The data is still there, but you need to re-create topics.
+Have a look at:
+ * [./prometheus](./prometheus/)
+ * [./linkedin-burrow](./linkedin-burrow/)
+ * [or plain JMX](https://github.com/Yolean/kubernetes-kafka/pull/96)
+ * what's happening in the [monitoring](https://github.com/Yolean/kubernetes-kafka/labels/monitoring) label.
+ * Note that this repo is intentionally light on [automation](https://github.com/Yolean/kubernetes-kafka/labels/automation). We think every SRE team must build the operational knowledge first.
 
-## Start Kafka
+## Outside (out-of-cluster) access
 
-Assuming you have your PVCs `Bound`, or enabled automatic provisioning (see above), go ahead and:
+Available for:
 
-```
-kubectl create -f ./
-```
+ * [Brokers](./outside-services/)
 
-You might want to verify in logs that Kafka found its own DNS name(s) correctly. Look for records like:
-```
-kubectl logs kafka-0 | grep "Registered broker"
-# INFO Registered broker 0 at path /brokers/ids/0 with addresses: PLAINTEXT -> EndPoint(kafka-0.broker.kafka.svc.cluster.local,9092,PLAINTEXT)
-```
+## Fewer than three nodes?
 
-## Testing manually
+For [minikube](https://github.com/kubernetes/minikube/), [youkube](https://github.com/Yolean/youkube) etc:
 
-There's a Kafka pod that doesn't start the server, so you can invoke the various shell scripts.
-```
-kubectl create -f test/99testclient.yml
-```
+ * [Scale 1](https://github.com/Yolean/kubernetes-kafka/pull/44)
+ * [Scale 2](https://github.com/Yolean/kubernetes-kafka/pull/118)
 
-See `./test/test.sh` for some sample commands.
+## Stream...
 
-## Automated test, while going chaosmonkey on the cluster
-
-This is WIP, but topic creation has been automated. Note that as a [Job](http://kubernetes.io/docs/user-guide/jobs/), it will restart if the command fails, including if the topic exists :(
-```
-kubectl create -f test/11topic-create-test1.yml
-```
-
-Pods that keep consuming messages (but they won't exit on cluster failures)
-```
-kubectl create -f test/21consumer-test1.yml
-```
-
-## Teardown & cleanup
-
-Testing and retesting... delete the namespace. PVs are outside namespaces so delete them too.
-```
-kubectl delete namespace kafka
-rm -R ./data/ && kubectl delete pv datadir-kafka-0 datadir-kafka-1 datadir-kafka-2
-```
+ * [Kubernetes events to Kafka](./events-kube/)
+ * [Container logs to Kafka](https://github.com/Yolean/kubernetes-kafka/pull/131)
+ * [Heapster metrics to Kafka](https://github.com/Yolean/kubernetes-kafka/pull/120)
